@@ -1,5 +1,7 @@
 .venv/
 output/
+raw_imgs/
+music_xmls/
 
 # Python
 __pycache__/
