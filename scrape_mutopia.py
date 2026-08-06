@@ -5,12 +5,20 @@ robots.txt permits crawling). IMSLP was considered but its robots.txt disallows
 the paths needed to fetch score files (/imglnks/, /images/, /wiki/File:).
 
 For each composer, walks the paginated "Instrument=Piano" search results,
-downloads each piece's A4 PDF, rasterizes every page, and crops the top 15%
-off only the first page of each piece (removing the title/composer header;
-later pages have no such header so are kept uncropped). Skips pages that
-come out near-blank (cover pages, license/footer-only pages), and saves the
-rest as PNGs under raw_imgs/<Composer>/ until the per-composer target is
-reached.
+downloads each piece's A4 PDF, rasterizes every page uncropped, skips pages
+that come out near-blank (cover pages, license/footer-only pages), and
+saves the rest as PNGs under raw_imgs/<Composer>/ until the per-composer
+target is reached.
+
+Pages are not cropped to remove the title/composer header: oemer's models
+only detect staff lines and musical symbols, so header text never makes it
+into the MusicXML output regardless (verified empirically -- no <credit>,
+<words>, or <credit-words> elements appear even from pages with visible
+printed text). An earlier version cropped the top 15% off page 1 to redact
+the composer's name in case raw_imgs was ever used directly for image-based
+classification, but a fixed crop fraction isn't safe: title-block height
+varies per piece, and on several pieces it clipped into the first system's
+staff instead (e.g. bwv850b_p01 lost measures 1-2 entirely).
 """
 
 import re
@@ -35,7 +43,6 @@ SEARCH_URL = "https://www.mutopiaproject.org/cgibin/make-table.cgi"
 USER_AGENT = "ClassiCat-research-scraper/1.0 (educational ML dataset; contact: lynn737@gmail.com)"
 
 TARGET_PER_COMPOSER = 200
-CROP_TOP_FRACTION = 0.15
 RENDER_DPI = 150
 MIN_INK_FRACTION = 0.005  # below this, treat page as blank (cover/license page) and skip
 REQUEST_DELAY_SECONDS = 0.5
@@ -81,9 +88,6 @@ def process_pdf(pdf_bytes: bytes, out_dir: Path, slug: str, remaining: int) -> i
             break
         pix = doc[page_num].get_pixmap(matrix=mat)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        if page_num == 0:
-            crop_top_px = int(img.height * CROP_TOP_FRACTION)
-            img = img.crop((0, crop_top_px, img.width, img.height))
         if is_mostly_blank(img):
             continue
         out_path = out_dir / f"{slug}_p{page_num + 1:02d}.png"

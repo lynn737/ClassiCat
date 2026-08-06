@@ -5,7 +5,10 @@ image instead of taking down the whole batch. Deskewing is disabled (-d): the so
 pages are clean LilyPond-rendered PDFs, not scans, so there's no warp to correct, and
 deskewing was observed to crash on at least one sparse page (assertion error in
 oemer's dewarp.py). Already-produced outputs are skipped, so an interrupted run can
-be resumed by just re-invoking the script.
+be resumed by just re-invoking the script. Images that fail are marked with a
+sidecar `.failed` file so a resume doesn't keep re-attempting known-deterministic
+failures (oemer has no randomness, so a failure on one run will fail identically
+on the next).
 """
 
 import argparse
@@ -38,8 +41,11 @@ def run_one(composer: str, img_path: Path) -> dict:
     out_dir = OUT_DIR / composer
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{img_path.stem}.musicxml"
+    failed_marker = out_dir / f"{img_path.stem}.failed"
     if out_path.exists():
         return {"composer": composer, "image": img_path.name, "status": "skipped", "elapsed": 0.0}
+    if failed_marker.exists():
+        return {"composer": composer, "image": img_path.name, "status": "skipped_failed", "elapsed": 0.0}
 
     start = time.time()
     try:
@@ -54,8 +60,10 @@ def run_one(composer: str, img_path: Path) -> dict:
     elapsed = time.time() - start
 
     if not out_path.exists():
-        stderr_lines = result.stderr.strip().splitlines()
-        error = stderr_lines[-1] if stderr_lines else "unknown error"
+        stderr_lines = [ln for ln in result.stderr.strip().splitlines() if ln.strip()]
+        error_line = next((ln for ln in reversed(stderr_lines) if "Error" in ln or "Exception" in ln), None)
+        error = error_line or (stderr_lines[-1] if stderr_lines else "unknown error")
+        failed_marker.write_text(error + "\n")
         return {"composer": composer, "image": img_path.name, "status": "failed", "elapsed": elapsed, "error": error}
 
     return {"composer": composer, "image": img_path.name, "status": "success", "elapsed": elapsed}
@@ -78,7 +86,7 @@ def main() -> None:
     failures_log = OUT_DIR / "_failures.log"
 
     batch_start = time.time()
-    done = succeeded = skipped = 0
+    done = succeeded = skipped = skipped_failed = 0
     with ProcessPoolExecutor(max_workers=args.workers) as pool, open(failures_log, "a") as flog:
         futures = {pool.submit(run_one, composer, img): (composer, img) for composer, img in tasks}
         for future in as_completed(futures):
@@ -90,6 +98,9 @@ def main() -> None:
             elif res["status"] == "skipped":
                 skipped += 1
                 print(f"[{done}/{len(tasks)}] SKIP {res['composer']}/{res['image']} (already exists)")
+            elif res["status"] == "skipped_failed":
+                skipped_failed += 1
+                print(f"[{done}/{len(tasks)}] SKIP {res['composer']}/{res['image']} (known failure, not retrying)")
             else:
                 err = res.get("error", "")
                 print(f"[{done}/{len(tasks)}] FAIL {res['composer']}/{res['image']} ({res['status']}): {err}")
@@ -97,8 +108,11 @@ def main() -> None:
                 flog.flush()
 
     total_elapsed = time.time() - batch_start
-    failed = done - succeeded - skipped
-    print(f"Done in {total_elapsed / 60:.1f} min. {succeeded} succeeded, {skipped} skipped, {failed} failed (see {failures_log}).")
+    failed = done - succeeded - skipped - skipped_failed
+    print(
+        f"Done in {total_elapsed / 60:.1f} min. {succeeded} succeeded, {skipped} skipped, "
+        f"{skipped_failed} skipped (known failures), {failed} newly failed (see {failures_log})."
+    )
 
 
 if __name__ == "__main__":
