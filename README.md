@@ -1,4 +1,4 @@
-# ClassiCat
+# ClassiCat 🎹
 
 Given an unlabelled classical piano score, predict its composer.
 
